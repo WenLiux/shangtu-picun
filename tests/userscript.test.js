@@ -126,7 +126,9 @@ const documentStub = {
 const scriptPath = path.join(__dirname, '..', 'shangtu-picun.user.js');
 let source = fs.readFileSync(scriptPath, 'utf8');
 assert.match(source, /@name\s+商图批存（京东\/天猫\/淘宝）/);
-assert.match(source, /@version\s+1\.6\.0/);
+assert.match(source, /@version\s+1\.6\.1/);
+assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/WenLiux\/shangtu-picun\/main\/shangtu-picun\.user\.js/);
+assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/WenLiux\/shangtu-picun\/main\/shangtu-picun\.user\.js/);
 assert.match(source, /@connect\s+img10\.360buyimg\.com/);
 assert.match(source, /@connect\s+img14\.360buyimg\.com/);
 assert.match(source, /@connect\s+img30\.360buyimg\.com/);

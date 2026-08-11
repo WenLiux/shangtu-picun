@@ -6,11 +6,13 @@ Tampermonkey（油猴）本地脚本，在京东、天猫和淘宝商品详情�
 
 ## 一键安装
 
-- [Greasy Fork 安装（推荐）](https://greasyfork.org/scripts/586245)
+- [GitHub 一键安装（自动更新）](https://raw.githubusercontent.com/WenLiux/shangtu-picun/main/shangtu-picun.user.js)
+- [Greasy Fork 安装](https://greasyfork.org/scripts/586245)
 - [OpenUserJS 安装](https://openuserjs.org/scripts/wenl/%E4%BA%AC%E5%9B%BE%E6%89%B9%E5%AD%98)
-- [GitHub Raw 安装（备用）](https://github.com/WenLiux/shangtu-picun/raw/main/shangtu-picun.user.js)
 
 需要 Chrome 或 Edge，并提前安装 Tampermonkey。批量保存使用浏览器文件夹访问能力。
+
+通过 GitHub 链接安装后，Tampermonkey 会定期读取脚本内的 `@updateURL`，发现更高版本时自动更新；`@downloadURL` 始终指向公开仓库的 `main` 分支。
 
 ## 本地安装 / 开发版
 
@@ -98,6 +100,7 @@ Tampermonkey（油猴）本地脚本，在京东、天猫和淘宝商品详情�
 | 1.5.2 | 2026-07-30 | 将京东图片 CDN 改为显式 `@connect` 域名，并在请求失败时显示具体域名 |
 | 1.5.3 | 2026-07-30 | 项目更名为“商图批存”，统一脚本、界面、仓库和安装文件名称 |
 | 1.6.0 | 2026-08-11 | 新增天猫/淘宝 SKU 图片提取、独立预览入口、按规格命名及 CSV/JSON 清单 |
+| 1.6.1 | 2026-08-11 | 新增 GitHub 公开一键安装入口及 Tampermonkey 自动更新元数据 |
 
 ## 本地验证
 

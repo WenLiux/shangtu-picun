@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         商图批存（京东/天猫/淘宝）
 // @namespace    https://github.com/WenLiu6677/jingtu-picun
-// @version      1.6.0
+// @version      1.6.1
 // @description  一键下载京东、天猫和淘宝商品详情图，并支持天猫/淘宝 SKU 图片批量保存
 // @author       Wenl
 // @homepageURL  https://github.com/WenLiux/shangtu-picun
 // @supportURL   https://github.com/WenLiux/shangtu-picun/issues
+// @downloadURL  https://raw.githubusercontent.com/WenLiux/shangtu-picun/main/shangtu-picun.user.js
+// @updateURL    https://raw.githubusercontent.com/WenLiux/shangtu-picun/main/shangtu-picun.user.js
 // @match        https://item.jd.com/*.html
 // @match        https://item.jd.com/*
 // @match        https://detail.tmall.com/item.htm*
