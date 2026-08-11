@@ -6,6 +6,10 @@ const vm = require('node:vm');
 function fakeElement() {
   return {
     style: {},
+    classList: { contains() { return false; } },
+    getAttribute() { return null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
     setAttribute() {},
     addEventListener() {},
     appendChild() {},
@@ -15,11 +19,41 @@ function fakeElement() {
 
 function fakeImage(attributes = {}, currentSrc = '') {
   return {
+    complete: true,
     getAttribute(name) {
       return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : null;
     },
+    addEventListener() {},
+    removeEventListener() {},
     currentSrc,
     src: attributes.src || currentSrc,
+  };
+}
+
+function fakeSkuRow({ vid, name, url, disabled = false }) {
+  const label = {
+    textContent: name,
+    getAttribute(attribute) {
+      return attribute === 'title' ? name : null;
+    },
+  };
+  const image = fakeImage({ src: url }, url);
+  return {
+    __label: label,
+    __image: image,
+    classList: { contains(className) { return disabled && className === 'isDisabled'; } },
+    getAttribute(attribute) {
+      if (attribute === 'data-vid') return vid;
+      if (attribute === 'data-disabled') return disabled ? 'true' : null;
+      return null;
+    },
+    querySelector(selector) {
+      if (selector === 'span[title], [data-sku-name]') return label;
+      if (selector === 'img') return image;
+      return null;
+    },
+    querySelectorAll() { return []; },
+    scrollIntoView() {},
   };
 }
 
@@ -37,6 +71,40 @@ const detailRoot = {
   },
 };
 
+const skuRows = [
+  fakeSkuRow({
+    vid: 'sku-30',
+    name: '粉蓝色 长30cm【升级浮点/深层放松】',
+    url: 'https://gw.alicdn.com/sku/powder-blue.jpg_.webp',
+  }),
+  fakeSkuRow({
+    vid: 'sku-45',
+    name: '樱桃粉 长45cm【升级浮点/深层放松】',
+    url: 'https://gw.alicdn.com/sku/cherry-pink.png',
+  }),
+  fakeSkuRow({
+    vid: 'sku-disabled',
+    name: '浅紫色 长60cm【升级浮点/深层放松】',
+    url: 'https://gw.alicdn.com/sku/disabled.webp',
+    disabled: true,
+  }),
+];
+
+const skuGroup = {
+  parentElement: null,
+  querySelectorAll(selector) {
+    if (selector === '[data-vid]') return skuRows;
+    if (selector === '[data-vid] span[title]') return skuRows.map(row => row.__label);
+    if (selector === '[data-vid] img') return skuRows.map(row => row.__image);
+    return [];
+  },
+};
+
+const skuColorLabel = {
+  parentElement: skuGroup,
+  querySelectorAll() { return []; },
+};
+
 const documentStub = {
   readyState: 'loading',
   head: { appendChild() {} },
@@ -49,7 +117,8 @@ const documentStub = {
   querySelector(selector) {
     return selector === '#imageTextInfo-content' ? detailRoot : null;
   },
-  querySelectorAll() {
+  querySelectorAll(selector) {
+    if (selector === '[title="颜色分类"]') return [skuColorLabel];
     return [];
   },
 };
@@ -57,7 +126,9 @@ const documentStub = {
 const scriptPath = path.join(__dirname, '..', 'shangtu-picun.user.js');
 let source = fs.readFileSync(scriptPath, 'utf8');
 assert.match(source, /@name\s+商图批存（京东\/天猫\/淘宝）/);
-assert.match(source, /@version\s+1\.5\.3/);
+assert.match(source, /@version\s+1\.6\.1/);
+assert.match(source, /@downloadURL\s+https:\/\/raw\.githubusercontent\.com\/WenLiux\/shangtu-picun\/main\/shangtu-picun\.user\.js/);
+assert.match(source, /@updateURL\s+https:\/\/raw\.githubusercontent\.com\/WenLiux\/shangtu-picun\/main\/shangtu-picun\.user\.js/);
 assert.match(source, /@connect\s+img10\.360buyimg\.com/);
 assert.match(source, /@connect\s+img14\.360buyimg\.com/);
 assert.match(source, /@connect\s+img30\.360buyimg\.com/);
@@ -74,6 +145,10 @@ source = source.replace(
     detectImageExtension,
     filterTmallPlatformAssets,
     fetchTmallImageUrls,
+    safeFilenamePart,
+    candidateSkuImageUrl,
+    collectTmallSkuRows,
+    fetchTmallSkuImageUrls,
   };
 })();`,
 );
@@ -109,6 +184,7 @@ assert.equal(api.normalizeImageUrl('data:image/png;base64,a'), null);
 assert.equal(api.inferImageExtension('https://img.alicdn.com/a.jpg_.webp'), 'webp');
 assert.equal(api.inferImageExtension('https://img.alicdn.com/a.jpeg'), 'jpg');
 assert.equal(api.inferImageExtension('https://img10.360buyimg.com/img/jfs/a.jpg.dpg'), 'jpg');
+assert.equal(api.safeFilenamePart('樱桃粉 长45cm【升级浮点/深层放松】'), '樱桃粉 长45cm【升级浮点_深层放松】');
 assert.deepEqual(
   Array.from(api.filterTmallPlatformAssets([
     'https://img.alicdn.com/a_!!633308262.jpg',
@@ -140,6 +216,13 @@ assert.equal(
   assert.equal(images.length, 2);
   assert.equal(images[0].name, '730408164255_detail_01.jpg');
   assert.equal(images[1].name, '730408164255_detail_02.gif');
+
+  const skuImages = await api.fetchTmallSkuImageUrls();
+  assert.equal(skuImages.length, 2);
+  assert.equal(skuImages[0].vid, 'sku-30');
+  assert.equal(skuImages[0].skuName, '粉蓝色 长30cm【升级浮点/深层放松】');
+  assert.equal(skuImages[0].name, '730408164255_sku_01_粉蓝色 长30cm【升级浮点_深层放松】.webp');
+  assert.equal(skuImages[1].name, '730408164255_sku_02_樱桃粉 长45cm【升级浮点_深层放松】.png');
   console.log('userscript tests passed');
 })().catch(error => {
   console.error(error);
