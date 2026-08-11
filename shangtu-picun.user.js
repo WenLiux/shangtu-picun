@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         商图批存（京东/天猫/淘宝）
-// @namespace    https://github.com/WenLiux/shangtu-picun
-// @version      1.5.3
-// @description  一键下载京东、天猫和淘宝商品详情页的全部详情图，批量下载只需选择一次保存文件夹
+// @namespace    https://github.com/WenLiu6677/jingtu-picun
+// @version      1.6.0
+// @description  一键下载京东、天猫和淘宝商品详情图，并支持天猫/淘宝 SKU 图片批量保存
 // @author       Wenl
 // @homepageURL  https://github.com/WenLiux/shangtu-picun
 // @supportURL   https://github.com/WenLiux/shangtu-picun/issues
@@ -115,6 +115,19 @@
 .jd-dl-btn:hover {
   transform: scale(1.08);
   box-shadow: 0 6px 24px rgba(228, 57, 60, 0.6);
+}
+.jd-dl-btn-sku {
+  bottom: 142px;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  box-shadow: 0 4px 16px rgba(79, 70, 229, 0.45);
+}
+.jd-dl-btn-sku:hover {
+  box-shadow: 0 6px 24px rgba(79, 70, 229, 0.6);
+}
+.jd-dl-btn-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
 }
 .jd-dl-btn:active { transform: scale(0.95); }
 .jd-dl-btn svg { width: 24px; height: 24px; fill: none; stroke: #fff; stroke-width: 2; }
@@ -245,6 +258,10 @@
   object-fit: cover;
   display: block;
   background: rgba(255,255,255,0.03);
+}
+.jd-dl-panel-sku .jd-dl-card-img {
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
 }
 .jd-dl-card-label {
   position: absolute;
@@ -461,6 +478,136 @@
       || img.src;
   }
 
+  function cleanText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function safeFilenamePart(value) {
+    const cleaned = cleanText(value)
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/[. ]+$/g, '');
+    return (cleaned || 'sku').slice(0, 120);
+  }
+
+  function isPlaceholderImageUrl(url) {
+    return !url
+      || /^(?:data|blob):/i.test(url)
+      || /2-tps-2-2|transparent|blank|loading/i.test(url);
+  }
+
+  function candidateSkuImageUrl(image) {
+    if (!image) return null;
+    const candidates = [
+      image.currentSrc,
+      image.src,
+      image.getAttribute('data-src'),
+      image.getAttribute('data-original'),
+      image.getAttribute('data-lazy-src'),
+    ];
+    const candidate = candidates.find(url => url && !isPlaceholderImageUrl(url))
+      || candidates.find(Boolean);
+    return normalizeImageUrl(candidate);
+  }
+
+  function findTmallSkuGroup() {
+    const labels = $$('[title="颜色分类"]').reverse();
+    for (const label of labels) {
+      let current = label;
+      for (let level = 0; current && level < 8; level++, current = current.parentElement) {
+        if (current !== document.body
+          && current !== document.documentElement
+          && current.querySelectorAll('[data-vid] span[title]').length > 1
+          && current.querySelectorAll('[data-vid] img').length > 1) {
+          return current;
+        }
+      }
+    }
+
+    return $$('div[class*="skuItemClip"], [data-sku-group]')
+      .find(group => group.querySelectorAll('[data-vid] span[title]').length > 1) || null;
+  }
+
+  function collectTmallSkuRows() {
+    const group = findTmallSkuGroup();
+    if (!group) {
+      throw new Error('没有找到“颜色分类” SKU 区域，请确认当前是天猫或淘宝商品详情页');
+    }
+
+    const rows = $$('[data-vid]', group)
+      .map(element => {
+        const label = $('span[title], [data-sku-name]', element);
+        const image = $('img', element);
+        return {
+          element,
+          vid: element.getAttribute('data-vid') || '',
+          name: cleanText(label && (label.getAttribute('title') || label.textContent)),
+          disabled: element.getAttribute('data-disabled') === 'true'
+            || element.classList.contains('isDisabled'),
+          image,
+        };
+      })
+      .filter(row => row.name && row.image && !row.disabled && !/^\d+$/.test(row.name));
+
+    const uniqueRows = new Map();
+    rows.forEach(row => {
+      const key = row.vid || row.name;
+      if (!uniqueRows.has(key)) uniqueRows.set(key, row);
+    });
+
+    const result = [...uniqueRows.values()];
+    if (result.length === 0) throw new Error('没有找到可售 SKU 图片');
+    return result;
+  }
+
+  async function loadTmallSkuImage(row) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const image = $('img', row.element);
+      const url = candidateSkuImageUrl(image);
+      if (url && !isPlaceholderImageUrl(url)) return url;
+
+      if (typeof row.element.scrollIntoView === 'function') {
+        row.element.scrollIntoView({ block: 'center', inline: 'nearest' });
+      }
+      await wait(180);
+      await new Promise(resolve => {
+        const currentImage = $('img', row.element);
+        if (!currentImage || currentImage.complete) {
+          resolve();
+          return;
+        }
+        const finish = () => {
+          currentImage.removeEventListener('load', finish);
+          currentImage.removeEventListener('error', finish);
+          resolve();
+        };
+        currentImage.addEventListener('load', finish, { once: true });
+        currentImage.addEventListener('error', finish, { once: true });
+        setTimeout(finish, 1200);
+      });
+    }
+
+    throw new Error(`图片未加载：${row.name}`);
+  }
+
+  async function fetchTmallSkuImageUrls() {
+    const rows = collectTmallSkuRows();
+    const images = [];
+
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      const url = await loadTmallSkuImage(row);
+      images.push({
+        url,
+        name: `${PRODUCT_ID}_sku_${String(index + 1).padStart(2, '0')}_${safeFilenamePart(row.name)}.${inferImageExtension(url)}`,
+        order: index + 1,
+        vid: row.vid,
+        skuName: row.name,
+      });
+    }
+
+    return images;
+  }
+
   function filterTmallPlatformAssets(urls) {
     const ownerCounts = new Map();
     urls.forEach(url => {
@@ -501,25 +648,34 @@
     throw new Error('图文详情区域中没有可下载的图片');
   }
 
-  function fetchImageUrls() {
+  function fetchImageUrls(kind = 'detail') {
+    if (kind === 'sku') {
+      if (PLATFORM === 'jd') throw new Error('SKU 图片下载目前仅支持天猫和淘宝');
+      return fetchTmallSkuImageUrls();
+    }
     return PLATFORM === 'jd' ? fetchJdImageUrls() : fetchTmallImageUrls();
   }
 
   // ====================
   // 预览面板
   // ====================
-  function showPanel(imageUrls) {
+  function showPanel(imageUrls, options = {}) {
+    const kind = options.kind || 'detail';
+    const isSku = kind === 'sku';
+    const collectionName = isSku ? 'SKU 图' : '详情图';
     // 如果已存在，先移除
     const existing = $('.jd-dl-overlay');
     if (existing) existing.remove();
 
     const overlay = createEl('div', { class: 'jd-dl-overlay' });
 
-    const panel = createEl('div', { class: 'jd-dl-panel' });
+    const panel = createEl('div', {
+      class: `jd-dl-panel${isSku ? ' jd-dl-panel-sku' : ''}`,
+    });
 
     // Header
     const header = createEl('div', { class: 'jd-dl-header' }, [
-      createEl('h2', {}, [`商图批存 · ${PLATFORM_NAME}详情图 ${imageUrls.length} 张 · 商品 ID: ${PRODUCT_ID}`]),
+      createEl('h2', {}, [`商图批存 · ${PLATFORM_NAME}${collectionName} ${imageUrls.length} ${isSku ? '个' : '张'} · 商品 ID: ${PRODUCT_ID}`]),
       createEl('div', { class: 'jd-dl-header-actions' }, [
         createEl('button', {
           class: 'jd-dl-btn-zip',
@@ -565,7 +721,9 @@
     panel.appendChild(body);
 
     const footer = createEl('div', { class: 'jd-dl-footer' }, [
-      '点击图片查看原图 · 批量下载只需选择一次文件夹 · By Wenl',
+      isSku
+        ? '按 SKU 名称保存 · 同步生成 CSV/JSON 清单 · By Wenl'
+        : '点击图片查看原图 · 批量下载只需选择一次文件夹 · By Wenl',
     ]);
     panel.appendChild(footer);
 
@@ -587,7 +745,7 @@
 
     // 批量下载按钮
     const zipBtn = $('#jd-dl-zip-btn', panel);
-    zipBtn.addEventListener('click', () => downloadAll(imageUrls, zipBtn));
+    zipBtn.addEventListener('click', () => downloadAll(imageUrls, zipBtn, { kind }));
   }
 
   // ====================
@@ -739,13 +897,11 @@
     });
   }
 
-  async function saveImageToDirectory(imgInfo, directoryHandle) {
-    const result = await fetchImageData(imgInfo);
-    const actualName = replaceImageExtension(imgInfo.name, result.extension);
-    const fileHandle = await directoryHandle.getFileHandle(actualName, { create: true });
+  async function writeBytesToDirectory(directoryHandle, name, data) {
+    const fileHandle = await directoryHandle.getFileHandle(name, { create: true });
     const writable = await fileHandle.createWritable();
     try {
-      await writable.write(result.data);
+      await writable.write(data);
       await writable.close();
     } catch (err) {
       if (typeof writable.abort === 'function') {
@@ -755,18 +911,25 @@
     }
 
     const savedFile = await fileHandle.getFile();
-    if (savedFile.size !== result.data.byteLength) {
-      throw new Error(`写入校验失败: ${savedFile.size}/${result.data.byteLength} 字节`);
+    const expectedSize = data.byteLength;
+    if (savedFile.size !== expectedSize) {
+      throw new Error(`写入校验失败: ${savedFile.size}/${expectedSize} 字节`);
     }
-    return actualName;
+    return savedFile.size;
+  }
+
+  async function saveImageToDirectory(imgInfo, directoryHandle) {
+    const result = await fetchImageData(imgInfo);
+    const actualName = replaceImageExtension(imgInfo.name, result.extension);
+    const bytes = await writeBytesToDirectory(directoryHandle, actualName, result.data);
+    return { name: actualName, bytes };
   }
 
   async function saveToDirectoryWithRetry(imgInfo, directoryHandle, retries = DOWNLOAD_RETRIES) {
     let lastError;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        await saveImageToDirectory(imgInfo, directoryHandle);
-        return;
+        return await saveImageToDirectory(imgInfo, directoryHandle);
       } catch (err) {
         lastError = err;
         if (attempt < retries) await wait(600 * (attempt + 1));
@@ -775,7 +938,48 @@
     throw lastError;
   }
 
-  async function downloadAll(imageUrls, btnEl) {
+  function csvCell(value) {
+    return `"${String(value == null ? '' : value).replace(/"/g, '""')}"`;
+  }
+
+  async function saveSkuManifest(directoryHandle, rows) {
+    const payload = {
+      itemId: PRODUCT_ID,
+      platform: PLATFORM,
+      sourceUrl: location.href,
+      generatedAt: new Date().toISOString(),
+      count: rows.length,
+      successCount: rows.filter(row => row.status === 'downloaded').length,
+      failureCount: rows.filter(row => row.status !== 'downloaded').length,
+      items: rows,
+    };
+    const csvRows = [
+      ['序号', 'vid', 'SKU名称', '文件名', '图片地址', '状态', '字节数', '错误'],
+      ...rows.map(row => [
+        row.order,
+        row.vid,
+        row.skuName,
+        row.filename,
+        row.imageUrl,
+        row.status,
+        row.bytes,
+        row.error,
+      ]),
+    ];
+    const encoder = new TextEncoder();
+    await writeBytesToDirectory(
+      directoryHandle,
+      'SKU_manifest.json',
+      encoder.encode(JSON.stringify(payload, null, 2)),
+    );
+    await writeBytesToDirectory(
+      directoryHandle,
+      'SKU_manifest.csv',
+      encoder.encode(`\ufeff${csvRows.map(row => row.map(csvCell).join(',')).join('\r\n')}`),
+    );
+  }
+
+  async function downloadAll(imageUrls, btnEl, options = {}) {
     const total = imageUrls.length;
     if (total === 0) return;
 
@@ -798,21 +1002,48 @@
       return;
     }
 
-    toast(`正在保存 ${total} 张图片到“${directoryHandle.name}”...`, 'success');
+    const isSku = options.kind === 'sku';
+    toast(`正在保存 ${total} ${isSku ? '个 SKU' : '张图片'}到“${directoryHandle.name}”...`, 'success');
     let nextIndex = 0;
     let completed = 0;
     let succeeded = 0;
     const failures = [];
+    const manifestRows = new Array(total);
 
     const worker = async () => {
       while (nextIndex < total) {
-        const img = imageUrls[nextIndex++];
+        const currentIndex = nextIndex++;
+        const img = imageUrls[currentIndex];
         try {
-          await saveToDirectoryWithRetry(img, directoryHandle);
+          const saved = await saveToDirectoryWithRetry(img, directoryHandle);
           succeeded++;
+          if (isSku) {
+            manifestRows[currentIndex] = {
+              order: img.order || currentIndex + 1,
+              vid: img.vid || '',
+              skuName: img.skuName || '',
+              filename: saved.name,
+              imageUrl: img.url,
+              status: 'downloaded',
+              bytes: saved.bytes,
+              error: '',
+            };
+          }
         } catch (err) {
           failures.push({ img, error: err });
-          console.error(`[DETAIL DL] ${img.name} 下载失败:`, err);
+          if (isSku) {
+            manifestRows[currentIndex] = {
+              order: img.order || currentIndex + 1,
+              vid: img.vid || '',
+              skuName: img.skuName || '',
+              filename: img.name,
+              imageUrl: img.url,
+              status: 'failed',
+              bytes: 0,
+              error: err && err.message || String(err),
+            };
+          }
+          console.error(`[${isSku ? 'SKU' : 'DETAIL'} DL] ${img.name} 下载失败:`, err);
         } finally {
           completed++;
           btnEl.textContent = `下载中 ${completed}/${total}`;
@@ -823,11 +1054,31 @@
     try {
       const workerCount = Math.min(DOWNLOAD_CONCURRENCY, total);
       await Promise.all(Array.from({ length: workerCount }, () => worker()));
-      if (failures.length === 0) {
-        toast(`全部 ${succeeded} 张图片已保存到“${directoryHandle.name}”`, 'success');
+      let manifestError = null;
+      if (isSku) {
+        btnEl.textContent = '正在写入 SKU 清单...';
+        try {
+          await saveSkuManifest(directoryHandle, manifestRows);
+        } catch (err) {
+          manifestError = err;
+          console.error('[SKU DL] 清单写入失败:', err);
+        }
+      }
+
+      if (failures.length === 0 && !manifestError) {
+        toast(
+          isSku
+            ? `全部 ${succeeded} 个 SKU 图片及清单已保存到“${directoryHandle.name}”`
+            : `全部 ${succeeded} 张图片已保存到“${directoryHandle.name}”`,
+          'success',
+        );
       } else {
-        const firstError = failures[0].error && failures[0].error.message || '未知错误';
-        toast(`保存失败 ${failures.length} 张：${firstError}`, 'error');
+        const firstError = manifestError
+          || failures[0] && failures[0].error;
+        toast(
+          `${manifestError ? 'SKU 清单写入失败' : `保存失败 ${failures.length} 张`}：${firstError && firstError.message || '未知错误'}`,
+          'error',
+        );
       }
     } finally {
       btnEl.disabled = false;
@@ -838,7 +1089,8 @@
   // ====================
   // 加载状态弹窗
   // ====================
-  function showLoading() {
+  function showLoading(kind = 'detail') {
+    const collectionName = kind === 'sku' ? 'SKU 图片' : '详情图';
     const existing = $('.jd-dl-overlay');
     if (existing) existing.remove();
 
@@ -846,7 +1098,7 @@
     const panel = createEl('div', { class: 'jd-dl-panel', style: { maxWidth: '400px' } }, [
       createEl('div', { class: 'jd-dl-loading' }, [
         createEl('div', { class: 'jd-dl-spinner' }),
-        createEl('span', {}, ['正在获取详情图列表...']),
+        createEl('span', {}, [`正在获取${collectionName}列表...`]),
         createEl('span', { style: { fontSize: '12px', color: '#666' } }, [`${PLATFORM_NAME}商品 ID: ${PRODUCT_ID}`]),
       ]),
     ]);
@@ -888,19 +1140,19 @@
   // ====================
   // 主流程：获取并展示
   // ====================
-  async function fetchAndShow() {
-    const loadingOverlay = showLoading();
+  async function fetchAndShow(kind = 'detail') {
+    const loadingOverlay = showLoading(kind);
     try {
-      const imageUrls = await fetchImageUrls();
+      const imageUrls = await fetchImageUrls(kind);
       loadingOverlay.remove();
       if (imageUrls.length === 0) {
-        showError('未找到任何详情图片', fetchAndShow);
+        showError(`未找到任何${kind === 'sku' ? ' SKU ' : '详情'}图片`, () => fetchAndShow(kind));
       } else {
-        showPanel(imageUrls);
+        showPanel(imageUrls, { kind });
       }
     } catch (err) {
       loadingOverlay.remove();
-      showError(err.message, fetchAndShow);
+      showError(err.message, () => fetchAndShow(kind));
     }
   }
 
@@ -908,17 +1160,25 @@
   // 注入浮动按钮
   // ====================
   function injectButton() {
-    // 防重复注入
-    if ($('.jd-dl-btn')) return;
+    if (!$('.jd-dl-btn-detail')) {
+      const detailBtn = createEl('button', {
+        class: 'jd-dl-btn jd-dl-btn-detail',
+        title: '下载商品详情图',
+        html: `<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/><rect x="2" y="2" width="7" height="7" rx="1"/><rect x="15" y="2" width="7" height="7" rx="1"/></svg>`,
+        onClick: () => fetchAndShow('detail'),
+      });
+      document.body.appendChild(detailBtn);
+    }
 
-    const btn = createEl('button', {
-      class: 'jd-dl-btn',
-      title: '下载商品详情图',
-      html: `<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/><rect x="2" y="2" width="7" height="7" rx="1"/><rect x="15" y="2" width="7" height="7" rx="1"/></svg>`,
-      onClick: fetchAndShow,
-    });
-
-    document.body.appendChild(btn);
+    if (PLATFORM !== 'jd' && !$('.jd-dl-btn-sku')) {
+      const skuBtn = createEl('button', {
+        class: 'jd-dl-btn jd-dl-btn-sku',
+        title: '下载全部 SKU 图片',
+        html: '<span class="jd-dl-btn-label">SKU</span>',
+        onClick: () => fetchAndShow('sku'),
+      });
+      document.body.appendChild(skuBtn);
+    }
   }
 
   // ====================
@@ -930,5 +1190,5 @@
     injectButton();
   }
 
-  console.log(`[商图批存 · Wenl] 已就绪 | ${PLATFORM_NAME}商品 ID: ${PRODUCT_ID} | 点击右下角红色按钮下载详情图`);
+  console.log(`[商图批存 · Wenl] 已就绪 | ${PLATFORM_NAME}商品 ID: ${PRODUCT_ID} | 右下角可下载详情图${PLATFORM === 'jd' ? '' : '或 SKU 图片'}`);
 })();
